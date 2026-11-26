@@ -1,4 +1,3 @@
-
 services:
   db:
     image: postgres:17-alpine
@@ -16,16 +15,12 @@ services:
       - stockflow_postgres_data:/var/lib/postgresql/data
 
     healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"
-        ]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 10
       start_period: 5s
-      
+
   migrate:
     image: migrate/migrate:v4.20.1
     depends_on:
@@ -38,7 +33,29 @@ services:
       - "-database=postgres://stockflow_user:stockflow_password@db:5432/stockflow?sslmode=disable"
       - "up"
     restart: "no"
+
+  seed:
+    image: postgres:17-alpine
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      PGPASSWORD: stockflow_password
+    volumes:
+      - ./backend/seeds:/seeds:ro
+    entrypoint: ["psql"]
+    command:
+      - "-h"
+      - "db"
+      - "-U"
+      - "stockflow_user"
+      - "-d"
+      - "stockflow"
+      - "-v"
+      - "ON_ERROR_STOP=1"
+      - "-f"
+      - "/seeds/seed.sql"
+    restart: "no"
+
 volumes:
   stockflow_postgres_data:
-
-
