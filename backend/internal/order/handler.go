@@ -6,7 +6,10 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
+
+	"github.com/go-chi/chi/v5"
 )
 
 type Handler struct {
@@ -100,6 +103,108 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusCreated, CreateOrderResponse{
 		Data: result,
+	})
+}
+
+func (h *Handler) GetByID(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+
+	if err != nil || id <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": map[string]string{
+				"code":    "INVALID_ORDER_ID",
+				"message": "order ID must be a positive integer",
+			},
+		})
+		return
+	}
+
+	result, err := h.repository.GetByID(r.Context(), id)
+
+	if errors.Is(err, ErrOrderNotFound) {
+		writeJSON(w, http.StatusNotFound, map[string]any{
+			"error": map[string]string{
+				"code":    "ORDER_NOT_FOUND",
+				"message": "order not found",
+			},
+		})
+		return
+	}
+
+	if err != nil {
+		log.Printf("get order %d: %v", id, err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{
+			"error": map[string]string{
+				"code":    "INTERNAL_ERROR",
+				"message": "internal server error",
+			},
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"data": result,
+	})
+}
+
+func (h *Handler) Cancel(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+
+	if err != nil || id <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": map[string]string{
+				"code":    "INVALID_ORDER_ID",
+				"message": "order ID must be a positive integer",
+			},
+		})
+		return
+	}
+
+	result, err := h.repository.Cancel(r.Context(), id)
+
+	if errors.Is(err, ErrOrderNotFound) {
+		writeJSON(w, http.StatusNotFound, map[string]any{
+			"error": map[string]string{
+				"code":    "ORDER_NOT_FOUND",
+				"message": "order not found",
+			},
+		})
+		return
+	}
+
+	if errors.Is(err, ErrOrderAlreadyCancelled) {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error": map[string]string{
+				"code":    "ORDER_ALREADY_CANCELLED",
+				"message": "order has already been cancelled",
+			},
+		})
+		return
+	}
+
+	if errors.Is(err, ErrStockLimitExceeded) {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error": map[string]string{
+				"code":    "STOCK_LIMIT_EXCEEDED",
+				"message": "restored stock exceeds database limit",
+			},
+		})
+		return
+	}
+
+	if err != nil {
+		log.Printf("cancel order %d: %v", id, err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{
+			"error": map[string]string{
+				"code":    "INTERNAL_ERROR",
+				"message": "internal server error",
+			},
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"data": result,
 	})
 }
 

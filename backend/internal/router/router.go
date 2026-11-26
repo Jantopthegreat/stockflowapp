@@ -37,6 +37,8 @@ func New(pool *pgxpool.Pool) http.Handler {
 		r.Get("/products/{id}/movements", products.ListMovements)
 
 		r.Post("/orders", orders.Create)
+		r.Get("/orders/{id}", orders.GetByID)
+		r.Post("/orders/{id}/cancel", orders.Cancel)
 	})
 
 	return r
