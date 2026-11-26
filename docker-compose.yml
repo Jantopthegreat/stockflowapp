@@ -25,8 +25,20 @@ services:
       timeout: 5s
       retries: 10
       start_period: 5s
-
-    restart: unless-stopped
-
+      
+  migrate:
+    image: migrate/migrate:v4.20.1
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./backend/migrations:/migrations:ro
+    command:
+      - "-path=/migrations"
+      - "-database=postgres://stockflow_user:stockflow_password@db:5432/stockflow?sslmode=disable"
+      - "up"
+    restart: "no"
 volumes:
   stockflow_postgres_data:
+
+
