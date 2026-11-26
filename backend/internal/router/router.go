@@ -3,6 +3,7 @@ package router
 import (
 	"net/http"
 
+	"stockflow/backend/internal/dashboard"
 	"stockflow/backend/internal/handler"
 	"stockflow/backend/internal/order"
 	"stockflow/backend/internal/product"
@@ -24,6 +25,9 @@ func New(pool *pgxpool.Pool) http.Handler {
 	orders := order.NewHandler(
 		order.NewRepository(pool),
 	)
+	dashboardHandler := dashboard.NewHandler(
+		dashboard.NewRepository(pool),
+	)
 
 	r.Get("/health", handler.Health(pool))
 
@@ -39,6 +43,8 @@ func New(pool *pgxpool.Pool) http.Handler {
 		r.Post("/orders", orders.Create)
 		r.Get("/orders/{id}", orders.GetByID)
 		r.Post("/orders/{id}/cancel", orders.Cancel)
+
+		r.Get("/dashboard/summary", dashboardHandler.GetSummary)
 	})
 
 	return r
