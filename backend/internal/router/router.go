@@ -25,6 +25,7 @@ func New(pool *pgxpool.Pool) http.Handler {
 
 	r.Route("/api", func(r chi.Router) {
 		r.Get("/products", products.List)
+		r.Post("/products", products.Create)
 	})
 
 	return r

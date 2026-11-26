@@ -19,3 +19,13 @@ type ListResponse struct {
 	Limit int       `json:"limit"`
 	Total int64     `json:"total"`
 }
+
+type CreateProductRequest struct {
+	SKU   string `json:"sku"`
+	Name  string `json:"name"`
+	Price *int64 `json:"price"`
+}
+
+type CreateProductResponse struct {
+	Data Product `json:"data"`
+}

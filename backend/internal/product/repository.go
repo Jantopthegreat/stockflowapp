@@ -2,11 +2,15 @@ package product
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+var ErrDuplicateSKU = errors.New("SKU already exists")
 
 type Repository struct {
 	pool *pgxpool.Pool
@@ -97,4 +101,56 @@ func (repo *Repository) List(
 	}
 
 	return products, total, nil
+}
+
+func (repo *Repository) Create(
+	ctx context.Context,
+	sku string,
+	name string,
+	price int64,
+) (Product, error) {
+	query := `
+		INSERT INTO products (sku, name, price)
+		VALUES ($1, $2, $3)
+		RETURNING
+			id,
+			sku,
+			name,
+			price,
+			stock,
+			is_active,
+			created_at
+	`
+
+	var item Product
+
+	err := repo.pool.QueryRow(
+		ctx,
+		query,
+		sku,
+		name,
+		price,
+	).Scan(
+		&item.ID,
+		&item.SKU,
+		&item.Name,
+		&item.Price,
+		&item.Stock,
+		&item.IsActive,
+		&item.CreatedAt,
+	)
+
+	if err != nil {
+		var pgErr *pgconn.PgError
+
+		if errors.As(err, &pgErr) &&
+			pgErr.Code == "23505" &&
+			pgErr.ConstraintName == "products_sku_key" {
+			return Product{}, ErrDuplicateSKU
+		}
+
+		return Product{}, fmt.Errorf("create product: %w", err)
+	}
+
+	return item, nil
 }

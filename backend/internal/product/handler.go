@@ -2,6 +2,8 @@ package product
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"log"
 	"math"
 	"net/http"
@@ -65,6 +67,69 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		Page:  page,
 		Limit: limit,
 		Total: total,
+	})
+}
+
+func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
+	var req CreateProductRequest
+
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+	decoder.DisallowUnknownFields()
+
+	if err := decoder.Decode(&req); err != nil {
+		var typeErr *json.UnmarshalTypeError
+
+		if errors.As(err, &typeErr) && typeErr.Field == "price" {
+			writeError(w, http.StatusBadRequest, "INVALID_PRICE", "price must be an integer")
+			return
+		}
+
+		writeError(w, http.StatusBadRequest, "INVALID_BODY", "request body must be valid JSON")
+		return
+	}
+
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "INVALID_BODY", "request body must contain only one JSON object")
+		return
+	}
+
+	req.SKU = strings.TrimSpace(req.SKU)
+	req.Name = strings.TrimSpace(req.Name)
+
+	if req.SKU == "" {
+		writeError(w, http.StatusBadRequest, "INVALID_SKU", "SKU is required")
+		return
+	}
+
+	if req.Name == "" {
+		writeError(w, http.StatusBadRequest, "INVALID_NAME", "name is required")
+		return
+	}
+
+	if req.Price == nil || *req.Price < 0 || *req.Price > 2147483647 {
+		writeError(w, http.StatusBadRequest, "INVALID_PRICE", "price must be an integer between 0 and 2147483647")
+		return
+	}
+
+	item, err := h.repository.Create(
+		r.Context(),
+		req.SKU,
+		req.Name,
+		*req.Price,
+	)
+	if err != nil {
+		if errors.Is(err, ErrDuplicateSKU) {
+			writeError(w, http.StatusConflict, "DUPLICATE_SKU", "SKU already exists")
+			return
+		}
+
+		log.Printf("failed to create product: %v", err)
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to create product")
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, CreateProductResponse{
+		Data: item,
 	})
 }
 
