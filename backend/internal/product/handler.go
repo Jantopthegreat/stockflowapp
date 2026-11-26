@@ -214,7 +214,36 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		"data": item,
 	})
 }
+func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil || id < 1 {
+		writeError(w, http.StatusBadRequest, "INVALID_ID", "product ID must be a positive integer")
+		return
+	}
 
+	err = h.repository.Delete(r.Context(), id)
+
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrProductNotFound):
+			writeError(w, http.StatusNotFound, "PRODUCT_NOT_FOUND", "product not found")
+
+		case errors.Is(err, ErrProductHasHistory):
+			writeError(w, http.StatusConflict, "PRODUCT_HAS_HISTORY", "product has stock movement history")
+
+		case errors.Is(err, ErrProductHasSalesHistory):
+			writeError(w, http.StatusConflict, "PRODUCT_HAS_SALES_HISTORY", "product has sales history")
+
+		default:
+			log.Printf("failed to delete product: %v", err)
+			writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to delete product")
+		}
+
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
 func writeJSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

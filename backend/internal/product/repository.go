@@ -11,9 +11,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-var ErrDuplicateSKU = errors.New("SKU already exists")
 var (
+	ErrDuplicateSKU           = errors.New("SKU already exists")
 	ErrProductNotFound        = errors.New("product not found")
+	ErrProductHasHistory      = errors.New("product has stock movement history")
 	ErrProductHasSalesHistory = errors.New("product has sales history")
 )
 
@@ -264,4 +265,83 @@ func (repo *Repository) Update(
 	}
 
 	return item, nil
+}
+
+func (repo *Repository) Delete(
+	ctx context.Context,
+	id int64,
+) error {
+	tx, err := repo.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin delete product: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var sku string
+
+	err = tx.QueryRow(ctx, `
+		SELECT sku
+		FROM products
+		WHERE id = $1
+		FOR UPDATE
+	`, id).Scan(&sku)
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrProductNotFound
+	}
+
+	if err != nil {
+		return fmt.Errorf("lock product: %w", err)
+	}
+
+	var hasMovement bool
+
+	err = tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM stock_movements
+			WHERE product_id = $1
+		)
+	`, id).Scan(&hasMovement)
+
+	if err != nil {
+		return fmt.Errorf("check stock movements: %w", err)
+	}
+
+	if hasMovement {
+		return ErrProductHasHistory
+	}
+
+	var hasSalesHistory bool
+
+	err = tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM sales_order_items
+			WHERE sku = $1
+		)
+	`, sku).Scan(&hasSalesHistory)
+
+	if err != nil {
+		return fmt.Errorf("check sales history: %w", err)
+	}
+
+	if hasSalesHistory {
+		return ErrProductHasSalesHistory
+	}
+
+	_, err = tx.Exec(ctx, `
+		DELETE FROM products
+		WHERE id = $1
+	`, id)
+
+	if err != nil {
+		return fmt.Errorf("delete product: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit delete product: %w", err)
+	}
+
+	return nil
 }

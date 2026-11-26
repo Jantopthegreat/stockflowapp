@@ -27,6 +27,8 @@ func New(pool *pgxpool.Pool) http.Handler {
 		r.Get("/products", products.List)
 		r.Post("/products", products.Create)
 		r.Put("/products/{id}", products.Update)
+		r.Delete("/products/{id}", products.Delete)
+
 	})
 
 	return r
