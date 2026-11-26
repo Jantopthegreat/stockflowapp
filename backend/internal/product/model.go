@@ -36,3 +36,23 @@ type UpdateProductRequest struct {
 	Price    *int64 `json:"price"`
 	IsActive *bool  `json:"is_active"`
 }
+
+type StockAdjustmentRequest struct {
+	Type string `json:"type"`
+	Qty  *int64 `json:"qty"`
+	Note string `json:"note"`
+}
+
+type StockMovement struct {
+	ID        int64     `json:"id"`
+	ProductID int64     `json:"product_id"`
+	Type      string    `json:"type"`
+	Qty       int64     `json:"qty"`
+	Note      string    `json:"note"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type StockAdjustmentResponse struct {
+	Data  StockMovement `json:"data"`
+	Stock int64         `json:"stock"`
+}

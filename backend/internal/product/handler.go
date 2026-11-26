@@ -244,6 +244,114 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusNoContent)
 }
+
+func (h *Handler) AdjustStock(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil || id < 1 {
+		writeError(w, http.StatusBadRequest, "INVALID_ID", "product ID must be a positive integer")
+		return
+	}
+
+	var req StockAdjustmentRequest
+
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+	decoder.DisallowUnknownFields()
+
+	if err := decoder.Decode(&req); err != nil {
+		var typeErr *json.UnmarshalTypeError
+
+		if errors.As(err, &typeErr) && typeErr.Field == "qty" {
+			writeError(w, http.StatusBadRequest, "INVALID_QTY", "qty must be an integer")
+			return
+		}
+
+		writeError(w, http.StatusBadRequest, "INVALID_BODY", "request body must be valid JSON")
+		return
+	}
+
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "INVALID_BODY", "request body must contain only one JSON object")
+		return
+	}
+
+	req.Type = strings.TrimSpace(req.Type)
+	req.Note = strings.TrimSpace(req.Note)
+
+	if req.Type != "in" && req.Type != "out" {
+		writeError(w, http.StatusBadRequest, "INVALID_MOVEMENT_TYPE", "type must be 'in' or 'out'")
+		return
+	}
+
+	if req.Qty == nil || *req.Qty <= 0 || *req.Qty > 2147483647 {
+		writeError(w, http.StatusBadRequest, "INVALID_QTY", "qty must be an integer between 1 and 2147483647")
+		return
+	}
+
+	movement, newStock, err := h.repository.AdjustStock(
+		r.Context(),
+		id,
+		req.Type,
+		*req.Qty,
+		req.Note,
+	)
+
+	if err != nil {
+		var insufficient *InsufficientStockError
+
+		switch {
+		case errors.Is(err, ErrProductNotFound):
+			writeError(w, http.StatusNotFound, "PRODUCT_NOT_FOUND", "product not found")
+
+		case errors.As(err, &insufficient):
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"error": map[string]any{
+					"code":      "INSUFFICIENT_STOCK",
+					"message":   "not enough stock available",
+					"available": insufficient.Available,
+				},
+			})
+
+		case errors.Is(err, ErrStockLimitExceeded):
+			writeError(w, http.StatusConflict, "STOCK_LIMIT_EXCEEDED", "resulting stock exceeds the maximum allowed value")
+
+		default:
+			log.Printf("failed to adjust stock: %v", err)
+			writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to adjust product stock")
+		}
+
+		return
+	}
+
+	writeJSON(w, http.StatusOK, StockAdjustmentResponse{
+		Data:  movement,
+		Stock: newStock,
+	})
+}
+
+func (h *Handler) ListMovements(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil || id < 1 {
+		writeError(w, http.StatusBadRequest, "INVALID_ID", "product ID must be a positive integer")
+		return
+	}
+
+	movements, err := h.repository.ListMovements(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, ErrProductNotFound) {
+			writeError(w, http.StatusNotFound, "PRODUCT_NOT_FOUND", "product not found")
+			return
+		}
+
+		log.Printf("failed to list stock movements: %v", err)
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to retrieve stock movements")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string][]StockMovement{
+		"data": movements,
+	})
+}
+
 func writeJSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

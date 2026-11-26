@@ -11,12 +11,24 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// Error handling Product
 var (
 	ErrDuplicateSKU           = errors.New("SKU already exists")
 	ErrProductNotFound        = errors.New("product not found")
 	ErrProductHasHistory      = errors.New("product has stock movement history")
 	ErrProductHasSalesHistory = errors.New("product has sales history")
 )
+
+// Error handling Stock
+var ErrStockLimitExceeded = errors.New("stock limit exceeded")
+
+type InsufficientStockError struct {
+	Available int64
+}
+
+func (e *InsufficientStockError) Error() string {
+	return "insufficient stock"
+}
 
 type Repository struct {
 	pool *pgxpool.Pool
@@ -344,4 +356,167 @@ func (repo *Repository) Delete(
 	}
 
 	return nil
+}
+func (repo *Repository) AdjustStock(
+	ctx context.Context,
+	id int64,
+	movementType string,
+	qty int64,
+	note string,
+) (StockMovement, int64, error) {
+	tx, err := repo.pool.Begin(ctx)
+	if err != nil {
+		return StockMovement{}, 0, fmt.Errorf("begin stock adjustment: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var available int64
+
+	err = tx.QueryRow(ctx, `
+		SELECT stock
+		FROM products
+		WHERE id = $1
+		FOR UPDATE
+	`, id).Scan(&available)
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		return StockMovement{}, 0, ErrProductNotFound
+	}
+	if err != nil {
+		return StockMovement{}, 0, fmt.Errorf("lock product: %w", err)
+	}
+
+	const maxStock int64 = 2147483647
+
+	var newStock int64
+
+	if movementType == "in" {
+		if available > maxStock-qty {
+			return StockMovement{}, available, ErrStockLimitExceeded
+		}
+
+		err = tx.QueryRow(ctx, `
+			UPDATE products
+			SET stock = stock + $1
+			WHERE id = $2
+			  AND stock <= $3
+			RETURNING stock
+		`, qty, id, maxStock-qty).Scan(&newStock)
+	} else {
+		if available < qty {
+			return StockMovement{}, available, &InsufficientStockError{
+				Available: available,
+			}
+		}
+
+		err = tx.QueryRow(ctx, `
+			UPDATE products
+			SET stock = stock - $1
+			WHERE id = $2
+			  AND stock >= $1
+			RETURNING stock
+		`, qty, id).Scan(&newStock)
+	}
+
+	if err != nil {
+		return StockMovement{}, available, fmt.Errorf("update product stock: %w", err)
+	}
+
+	var movement StockMovement
+
+	err = tx.QueryRow(ctx, `
+		INSERT INTO stock_movements (
+			product_id,
+			type,
+			qty,
+			note
+		)
+		VALUES ($1, $2, $3, NULLIF($4, ''))
+		RETURNING
+			id,
+			product_id,
+			type,
+			qty,
+			COALESCE(note, ''),
+			created_at
+	`, id, movementType, qty, note).Scan(
+		&movement.ID,
+		&movement.ProductID,
+		&movement.Type,
+		&movement.Qty,
+		&movement.Note,
+		&movement.CreatedAt,
+	)
+
+	if err != nil {
+		return StockMovement{}, 0, fmt.Errorf("create stock movement: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return StockMovement{}, 0, fmt.Errorf("commit stock adjustment: %w", err)
+	}
+
+	return movement, newStock, nil
+}
+func (repo *Repository) ListMovements(
+	ctx context.Context,
+	id int64,
+) ([]StockMovement, error) {
+	var productID int64
+
+	err := repo.pool.QueryRow(ctx, `
+		SELECT id
+		FROM products
+		WHERE id = $1
+	`, id).Scan(&productID)
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrProductNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("check product: %w", err)
+	}
+
+	rows, err := repo.pool.Query(ctx, `
+		SELECT
+			id,
+			product_id,
+			type,
+			qty,
+			COALESCE(note, ''),
+			created_at
+		FROM stock_movements
+		WHERE product_id = $1
+		ORDER BY created_at DESC, id DESC
+	`, id)
+
+	if err != nil {
+		return nil, fmt.Errorf("list stock movements: %w", err)
+	}
+	defer rows.Close()
+
+	movements := make([]StockMovement, 0)
+
+	for rows.Next() {
+		var movement StockMovement
+
+		if err := rows.Scan(
+			&movement.ID,
+			&movement.ProductID,
+			&movement.Type,
+			&movement.Qty,
+			&movement.Note,
+			&movement.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan stock movement: %w", err)
+		}
+
+		movements = append(movements, movement)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate stock movements: %w", err)
+	}
+
+	return movements, nil
 }
