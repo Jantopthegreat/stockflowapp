@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"stockflow/backend/internal/handler"
+	"stockflow/backend/internal/product"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -16,7 +17,15 @@ func New(pool *pgxpool.Pool) http.Handler {
 	r.Use(middleware.RequestID)
 	r.Use(middleware.Recoverer)
 
+	products := product.NewHandler(
+		product.NewRepository(pool),
+	)
+
 	r.Get("/health", handler.Health(pool))
+
+	r.Route("/api", func(r chi.Router) {
+		r.Get("/products", products.List)
+	})
 
 	return r
 }
