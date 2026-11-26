@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"stockflow/backend/internal/handler"
+	"stockflow/backend/internal/order"
 	"stockflow/backend/internal/product"
 
 	"github.com/go-chi/chi/v5"
@@ -20,6 +21,9 @@ func New(pool *pgxpool.Pool) http.Handler {
 	products := product.NewHandler(
 		product.NewRepository(pool),
 	)
+	orders := order.NewHandler(
+		order.NewRepository(pool),
+	)
 
 	r.Get("/health", handler.Health(pool))
 
@@ -31,6 +35,8 @@ func New(pool *pgxpool.Pool) http.Handler {
 
 		r.Post("/products/{id}/stock", products.AdjustStock)
 		r.Get("/products/{id}/movements", products.ListMovements)
+
+		r.Post("/orders", orders.Create)
 	})
 
 	return r
