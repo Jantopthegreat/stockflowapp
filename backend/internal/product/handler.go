@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+
+	"github.com/go-chi/chi/v5"
 )
 
 type Handler struct {
@@ -130,6 +132,86 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusCreated, CreateProductResponse{
 		Data: item,
+	})
+}
+
+func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil || id < 1 {
+		writeError(w, http.StatusBadRequest, "INVALID_ID", "product ID must be a positive integer")
+		return
+	}
+
+	var req UpdateProductRequest
+
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+	decoder.DisallowUnknownFields()
+
+	if err := decoder.Decode(&req); err != nil {
+		var typeErr *json.UnmarshalTypeError
+
+		if errors.As(err, &typeErr) && typeErr.Field == "price" {
+			writeError(w, http.StatusBadRequest, "INVALID_PRICE", "price must be an integer")
+			return
+		}
+
+		writeError(w, http.StatusBadRequest, "INVALID_BODY", "request body must be valid JSON")
+		return
+	}
+
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "INVALID_BODY", "request body must contain only one JSON object")
+		return
+	}
+
+	req.SKU = strings.TrimSpace(req.SKU)
+	req.Name = strings.TrimSpace(req.Name)
+
+	if req.SKU == "" {
+		writeError(w, http.StatusBadRequest, "INVALID_SKU", "SKU is required")
+		return
+	}
+
+	if req.Name == "" {
+		writeError(w, http.StatusBadRequest, "INVALID_NAME", "name is required")
+		return
+	}
+
+	if req.Price == nil || *req.Price < 0 || *req.Price > 2147483647 {
+		writeError(w, http.StatusBadRequest, "INVALID_PRICE", "price must be an integer between 0 and 2147483647")
+		return
+	}
+
+	if req.IsActive == nil {
+		writeError(w, http.StatusBadRequest, "INVALID_IS_ACTIVE", "is_active is required")
+		return
+	}
+
+	item, err := h.repository.Update(
+		r.Context(),
+		id,
+		req.SKU,
+		req.Name,
+		*req.Price,
+		*req.IsActive,
+	)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrProductNotFound):
+			writeError(w, http.StatusNotFound, "PRODUCT_NOT_FOUND", "product not found")
+		case errors.Is(err, ErrDuplicateSKU):
+			writeError(w, http.StatusConflict, "DUPLICATE_SKU", "SKU already exists")
+		case errors.Is(err, ErrProductHasSalesHistory):
+			writeError(w, http.StatusConflict, "PRODUCT_HAS_SALES_HISTORY", "product SKU cannot be changed because it has sales history")
+		default:
+			log.Printf("failed to update product: %v", err)
+			writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to update product")
+		}
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]Product{
+		"data": item,
 	})
 }
 

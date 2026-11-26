@@ -5,12 +5,17 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 var ErrDuplicateSKU = errors.New("SKU already exists")
+var (
+	ErrProductNotFound        = errors.New("product not found")
+	ErrProductHasSalesHistory = errors.New("product has sales history")
+)
 
 type Repository struct {
 	pool *pgxpool.Pool
@@ -150,6 +155,112 @@ func (repo *Repository) Create(
 		}
 
 		return Product{}, fmt.Errorf("create product: %w", err)
+	}
+
+	return item, nil
+}
+
+func (repo *Repository) Update(
+	ctx context.Context,
+	id int64,
+	sku string,
+	name string,
+	price int64,
+	isActive bool,
+) (Product, error) {
+	tx, err := repo.pool.Begin(ctx)
+	if err != nil {
+		return Product{}, fmt.Errorf("begin update product: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var currentSKU string
+
+	err = tx.QueryRow(ctx, `
+		SELECT sku
+		FROM products
+		WHERE id = $1
+		FOR UPDATE
+	`, id).Scan(&currentSKU)
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Product{}, ErrProductNotFound
+	}
+	if err != nil {
+		return Product{}, fmt.Errorf("lock product: %w", err)
+	}
+
+	if sku != currentSKU {
+		var hasSalesHistory bool
+
+		err = tx.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1
+				FROM sales_order_items
+				WHERE sku = $1
+			)
+		`, currentSKU).Scan(&hasSalesHistory)
+
+		if err != nil {
+			return Product{}, fmt.Errorf("check sales history: %w", err)
+		}
+
+		if hasSalesHistory {
+			return Product{}, ErrProductHasSalesHistory
+		}
+	}
+
+	var item Product
+	var lastMovementAt pgtype.Timestamptz
+
+	err = tx.QueryRow(ctx, `
+		UPDATE products
+		SET sku = $1,
+			name = $2,
+			price = $3,
+			is_active = $4
+		WHERE id = $5
+		RETURNING
+			id,
+			sku,
+			name,
+			price,
+			stock,
+			is_active,
+			created_at,
+			(
+				SELECT MAX(sm.created_at)
+				FROM stock_movements sm
+				WHERE sm.product_id = products.id
+			)
+	`, sku, name, price, isActive, id).Scan(
+		&item.ID,
+		&item.SKU,
+		&item.Name,
+		&item.Price,
+		&item.Stock,
+		&item.IsActive,
+		&item.CreatedAt,
+		&lastMovementAt,
+	)
+
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) &&
+			pgErr.Code == "23505" &&
+			pgErr.ConstraintName == "products_sku_key" {
+			return Product{}, ErrDuplicateSKU
+		}
+
+		return Product{}, fmt.Errorf("update product: %w", err)
+	}
+
+	if lastMovementAt.Valid {
+		item.LastMovementAt = &lastMovementAt.Time
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return Product{}, fmt.Errorf("commit update product: %w", err)
 	}
 
 	return item, nil

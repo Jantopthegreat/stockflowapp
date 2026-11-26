@@ -29,3 +29,10 @@ type CreateProductRequest struct {
 type CreateProductResponse struct {
 	Data Product `json:"data"`
 }
+
+type UpdateProductRequest struct {
+	SKU      string `json:"sku"`
+	Name     string `json:"name"`
+	Price    *int64 `json:"price"`
+	IsActive *bool  `json:"is_active"`
+}
